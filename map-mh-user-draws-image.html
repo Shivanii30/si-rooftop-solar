@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Rooftop Detection in Maharashtra</title>
+
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.3/dist/leaflet.css" />
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet.draw/1.0.4/leaflet.draw.css" />
+
+    <script src="https://unpkg.com/leaflet@1.9.3/dist/leaflet.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet.draw/1.0.4/leaflet.draw.js"></script>
+
+    <style>
+        #map { height: 500px; width: 100%; }
+        #precisionMap { width: 600px; height: 400px; margin-top: 20px; display: none; }
+    </style>
+</head>
+<body>
+    <h1>Select and Draw on Rooftops for Detection in Maharashtra</h1>
+    <div id="map"></div>
+    <h3>Zoomed 2D Satellite Image of Selected Area:</h3>
+    <div id="precisionContainer">
+        <h3>Mark Your Rooftop on the Satellite Image for More Precision:</h3>
+        <div id="precisionMap"></div>
+    </div>
+
+    <script>
+        const map = L.map('map').setView([19.7515, 75.7139], 7);  // Maharashtra coordinates with zoom 7
+
+        const streetLayer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            attribution: 'Map data © OpenStreetMap contributors',
+            maxZoom: 20
+        }).addTo(map);
+
+        const satelliteLayer = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+            attribution: 'Tiles © Esri &mdash; Source: Esri, i-cubed, USDA, USGS, AEX, GeoEye, Getmapping, Aerogrid, IGN, IGP, UPR-EGP, and the GIS User Community',
+            maxZoom: 18
+        });
+
+        const labelsLayer = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}', {
+            attribution: 'Tiles © Esri &mdash; Source: Esri, HERE, Garmin, Intermap, increment P Corp., GEBCO, USGS, FAO, NPS, NRCAN, GeoBase, Kadaster NL, Ordnance Survey, Esri Japan, METI, Esri China (Hong Kong), and the GIS User Community',
+            maxZoom: 20,
+            opacity: 0.8
+        });
+
+        const baseLayers = {
+            "Street View": streetLayer,
+            "Satellite View": satelliteLayer
+        };
+
+        const overlayLayers = {
+            "Labels": labelsLayer
+        };
+
+        L.control.layers(baseLayers, overlayLayers).addTo(map);
+
+        map.on('zoomend', function() {
+            const currentZoom = map.getZoom();
+            if (currentZoom > 12) {
+                if (!map.hasLayer(satelliteLayer)) {
+                    map.removeLayer(streetLayer);
+                    map.addLayer(satelliteLayer);
+                }
+                if (!map.hasLayer(labelsLayer)) {
+                    map.addLayer(labelsLayer);
+                }
+            } else {
+                if (!map.hasLayer(streetLayer)) {
+                    map.removeLayer(satelliteLayer);
+                    map.removeLayer(labelsLayer);
+                    map.addLayer(streetLayer);
+                }
+            }
+        });
+
+        const drawControl = new L.Control.Draw({
+            draw: {
+                polygon: true,
+                rectangle: true,
+                circle: false,
+                marker: false,
+                polyline: false
+            }
+        });
+        map.addControl(drawControl);
+
+        map.on(L.Draw.Event.CREATED, function (e) {
+            const layer = e.layer;
+            map.addLayer(layer);
+
+            const coordinates = layer.getLatLngs()[0].map(coord => [coord.lat, coord.lng]);
+            const center = layer.getBounds().getCenter();
+            const { lat, lng } = center;
+
+            displaySatelliteImageForMarking(lat, lng, coordinates);
+        });
+
+        function displaySatelliteImageForMarking(lat, lng, coordinates) {
+            const zoom = 19;
+            const tileX = Math.floor((lng + 180) / 360 * Math.pow(2, zoom));
+            const tileY = Math.floor((1 - Math.log(Math.tan(lat * Math.PI / 180) + 1 / Math.cos(lat * Math.PI / 180)) / Math.PI) / 2 * Math.pow(2, zoom));
+
+            const tileUrl = `https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/${zoom}/${tileY}/${tileX}`;
+
+            document.getElementById('precisionMap').style.display = 'block';
+            const precisionMap = L.map('precisionMap').setView([lat, lng], zoom);
+            L.tileLayer(tileUrl, {
+                attribution: 'Tiles © Esri'
+            }).addTo(precisionMap);
+
+            const precisionDrawControl = new L.Control.Draw({
+                draw: {
+                    polygon: true,
+                    rectangle: true,
+                    circle: false,
+                    marker: false,
+                    polyline: false
+                }
+            });
+            precisionMap.addControl(precisionDrawControl);
+
+            precisionMap.on(L.Draw.Event.CREATED, function (e) {
+                const layer = e.layer;
+                precisionMap.addLayer(layer);
+
+                const rooftopCoordinates = layer.getLatLngs()[0].map(coord => [coord.lat, coord.lng]);
+                sendRooftopToServer(lat, lng, rooftopCoordinates);
+            });
+        }
+
+        function sendRooftopToServer(lat, lng, rooftopCoordinates) {
+            fetch('http://127.0.0.1:5000/save-rooftop', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    lat: lat,
+                    lng: lng,
+                    rooftopCoordinates: rooftopCoordinates
+                })
+            })
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error('Network response was not ok: ' + response.statusText);
+                }
+                return response.json();
+            })
+            .then(data => {
+                console.log('Rooftop marked and saved:', data);
+                alert('Rooftop marked and saved successfully!');
+            })
+            .catch(error => {
+                console.error('Error saving rooftop:', error);
+            });
+        }
+    </script>
+</body>
+</html>
